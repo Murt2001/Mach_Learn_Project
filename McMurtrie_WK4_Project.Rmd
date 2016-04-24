@@ -1,0 +1,123 @@
+---
+title: "Predicting How Well Participants Perform Training Activities"
+author: "Thomas McMurtrie"
+date: "April 23, 2016"
+output: 
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+---
+
+##Overview
+People regularly quantify how much of a particular activity they do, but they rarely quantify how well they do it.  In this project, I attempt to use data from accelerometers on the belt, forearm, army, and dumbell of 6 participants in order to develop a means to predict correct activity execution.  
+
+##Background
+Using devides such as Jawbone Up, Nike FuelBand, and Fitbit, it is now possible to collect a large amount of data about personal activity relatively inexpensively.  THese types of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks.  
+
+One thing people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.  In this project, I will use data from the accelerometers on the belt, forearm, arm, and dumbell of six participants.  THey were asked to perform barbell lifts correctly and incorrectly in five different ways.  More information is available from the website [here](http://groupware.les.inf.puc-rio.br/har).  
+
+The  training data used to build the initial model is found [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv); the data used for testing found [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv).  
+
+##Data Processing
+###Loading the Data
+To begin the process of answering the research question, I first download the datasets.  Because the datasets are large, the code first ensures that the data files have not been previously downloaded.   
+```{r}
+library(downloader)
+library(caret)
+library(dplyr)
+library(rpart)
+library(randomForest)
+
+# Download the datasets.
+trainfileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testfileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+if(!file.exists("pml-training.csv")) {
+    download(trainfileUrl, dest = "pml-training.csv", mode = "wb")
+}
+
+if(!file.exists("pml-testing.csv")) {
+    download(testfileUrl, dest = "pml-testing.csv", mode = "wb")
+}
+```
+
+After downloading the files, I then read the data into R--beginning with the training dataset.  
+```{r}
+# Read in the data.
+training <- read.csv("pml-training.csv")
+dim(training)
+```
+I can see that the training dataset has 160 variables and 19,622 observations.  
+
+###Processing the Data
+I first apply the nearZeroVar function in order to remove those variables contained in the training set that have near zero variability.  This helps to reduce the dimensions of the dataset and eliminate variables that will not provide predictive power to the modeling effort.
+```{r}
+nzv_train <- nearZeroVar(training, saveMetrics = TRUE)
+nzv_train
+training <- training[ , nzv_train$nzv == "FALSE"]
+```
+
+Next, I take out the remaining variables that contain "NA" variables.  Variables with significant "NAs" cause issues with many of the predicitive algorithms.
+```{r}
+training <- training[ , colSums(is.na(training)) == 0]
+```
+
+I remove the "X" variables (just an index variable), and the date/time variables since their does not seem to be a time component to this data.  The tng_colnames object is created as the final listing of variables that I will keep in the "testing" set.  
+```{r}
+training <- select(training, -c(X, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp))
+tng_colnames <- select(training, -c(classe))
+dim(training)
+```
+
+Next, I read in the testing dataset.  I then subset it to keep only those variables remaining in the training dataset (less the classe variable, of course).  
+```{r}
+testing <- read.csv("pml-testing.csv")
+dim(testing)
+testing <- testing[as.character(colnames(tng_colnames))]
+rm(tng_colnames)
+```
+
+Finally, because I want to validate my model prior to its application, I subset the training set into two subsets:  the true training set and the portion of the training set I'll use to validate my prediction algorithm.  
+```{r}
+set.seed(125)
+inTrain <- createDataPartition(y = training$classe, p = 0.65, list = FALSE) #maybe lower to 65% or so
+train_set <- training[inTrain, ]
+val <- training[-inTrain, ]
+```
+
+###Building the Models
+I begin my modeling by implementing a simple regression tree.  Given their relative simplicity, I first seek to apply the method before resorting to more computationally intensive methods (like a random forest).  
+```{r}
+mod_tree <- train(classe ~ ., data = train_set, method = "rpart")
+mod_tree
+pred_val_tree <- predict(mod_tree, val)
+confusionMatrix(val$classe, pred_val_tree)
+```
+This model's roughly 50% accuracy indicates that it is no better than a coin flip.    
+
+I next implement a random forest predictive algorithm against the training dataset.  In my implementation, I accept the (unstated) default of examining 500 trees.  I specify that my model should be controlled (trControl) using the trainControl function that applies a 10 fold cross validation in order to maximize model fit (without overfitting).  The fairly large number of trees and folds resulted in this model taking a lengthy time to process.  
+```{r}
+modFit <- train(classe ~ ., data = train_set, method = "rf", prox = TRUE, trControl = trainControl(method = "cv", number = 10))
+modFit
+modFit$finalModel 
+```
+
+From the above output, we can see that the random forest selected a 30-variable model with an accuracy of 0.998 and a Kappa of 0.997.  The out of box estimate of error rate is 0.2%.  
+
+Given these model fit characteristics, I next use the model to predict agains the validation dataset and compare the prediction against the actual values using the confusionMatrix function.
+```{r}
+pred_val <- predict(modFit, val)
+confusionMatrix(val$classe, pred_val)
+```
+Output from the predictions and confusionMatrix indicate that the random forest model built is a good predictor of the classe variable.  
+
+##Predict Output
+Finally, I use the random forest model to predict the class variable of the test dataset.
+```{r}
+pred_test <- predict(modFit, testing)
+pred_test
+```
+These predictions will be input as my Week 4 Quiz.
+
+##Conclusion
+In order to develop an accurate prediciton model of the classe variable, I was unable to apply a "simple" and computationally un-demanding regression tree algorithm.  Though the random forest algorithm implemented was significantly more computationally time consuming, the predictive power of the model far exceeded the coin flip prediction of the regression tree.  
